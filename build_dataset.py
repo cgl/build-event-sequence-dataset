@@ -1,4 +1,5 @@
 import os
+import re
 from nltk.tokenize.util import regexp_span_tokenize
 
 
@@ -51,13 +52,13 @@ def read_annotations(ann_file_tbf):
     return events, corefs, afters, parents
 
 
-def use_context_words(window_size=2):
+def use_context_words(ann_file_tbf, dataset="_train", window_size=4):
     """
     Builds two files one with positive examples and one with negative examples.
     Each event pair surrounded by context words lays in one line seperated with
     whitespace. Eg: c1 c2 e1 c3 c4 c5 c6 e2 c7 c8
     """
-    ann_file_tbf = os.path.join("data", "Sequence_2017_all.tbf")
+
     events, corefs, afters, parents = read_annotations(ann_file_tbf)
 
     data_folder = os.path.join("data", "LDC2016E130_V5", "data", "all")
@@ -73,38 +74,77 @@ def use_context_words(window_size=2):
                     continue
                 with open(os.path.join(data_folder, doc_id+".txt")) as file:
                     text = file.read()
+                    replacements = [(" author=", "_author="),
+                                    (" datetime=", "_datetime="),
+                                    (" id=", "_id="),
+                                    (" alt=", "_alt="),
+                                    ("doc id", "doc_id"),
+                                    ("img src", "img_src"),
+                                    ("a href", "a_href"),
+                                    ("\n" , " "),
+                                    #(" <", "_<"),
+                                    #("> ", ">_"),
+                    ]
+                    for r in replacements:
+                        text = text.replace(r[0], r[1])
+
                 token_list = list(regexp_span_tokenize(text, r'\s'))
                 ctx_word_list = [] # [doc_id,event_id, to_event_id]
-                for e_id in linked_event_ids:
+                for i in range(2):
+                    e_id = linked_event_ids[i]
                     event_offsets = tuple([int(a) for a in events[doc_id][e_id]["offsets"].split(",")])
                     try:
                         nugget_ind = token_list.index(event_offsets)
                     except ValueError:
                         try:
-                            nugget_ind = [ind for ind,off in enumerate(token_list) if
-                                          off[0] == event_offsets[0] or
-                                          off[1] == event_offsets[1] or
-                                          off[0]-1 == event_offsets[0]
-                                          ][0]
+                            new_nugget_ind = [ind for ind,off in enumerate(token_list) if
+                                              off[0] == event_offsets[0] or
+                                              off[1] == event_offsets[1] or
+                                              off[0]-1 == event_offsets[0] or
+                                              off[0]+1 == event_offsets[0]
+                                              ][0]
+                            nugget_ind = new_nugget_ind
                         except IndexError:
-                            print(is_positive, doc_id, events[doc_id][e_id]["nugget"])
+                            print(is_positive, doc_id, events[doc_id][e_id]["nugget"],
+                                  text[event_offsets[0]-5:event_offsets[1]+5])
+                            if is_positive:
+                                import ipdb; ipdb.set_trace()
                             continue
                     # found the nugget in the tokenized text
                     # index of the nugget in token list is nugget_ind
+                    if i == 0:
+                        ctx_word_list.append(doc_id)
+                        ctx_word_list.append(event_id)
+                        ctx_word_list.append(to_event_id)
                     for t_ind in range(nugget_ind-window_size, nugget_ind + window_size + 1):
-                        context_word = text[token_list[t_ind][0]:token_list[t_ind][1]]
-                        # if "</a>" in context_word:
-                        #    import ipdb; ipdb.set_trace()
+                        if 0 > t_ind or t_ind >= len(token_list):
+                            context_word = "pad"
+                        else:
+                            context_word = text[token_list[t_ind][0]:token_list[t_ind][1]]
+                            # remove <post> <a href.. > etc
+                            context_word = re.sub(r"<.*>", "", context_word)
                         ctx_word_list.append(context_word.strip('"\',.:“”'))
+
                 if is_positive:
                     positives.append(" ".join(ctx_word_list))
                 else:
                     negatives.append(" ".join(ctx_word_list))
-    with open("seq_positives.txt", "w") as file:
+    with open("seq_positives%s_%s.txt" % (dataset, window_size), "w") as file:
         file.write("\n".join(positives))
-    with open("seq_negatives.txt", "w") as file:
-        file.write("\n".join(negatives[:4000]))
+    with open("seq_negatives%s_%s.txt" % (dataset, window_size), "w") as file:
+        file.write("\n".join(negatives[:len(positives)*2]))
+    with open("seq_negatives%s_%s_all.txt" % (dataset, window_size), "w") as file:
+        file.write("\n".join(negatives))
 
 
 if __name__ == "__main__":
-    use_context_words()
+    training = "LDC2016E130_test.tbf"
+    test = "LDC2016E130_test.tbf"
+    evaluation = "Sequence_2017_test.tbf"
+    training_plus_test = "Sequence_2017_training.tbf"
+    ann_file_tbf = os.path.join("data", evaluation)
+    use_context_words(ann_file_tbf, dataset="_eval")
+    ann_file_tbf = os.path.join("data", test)
+    use_context_words(ann_file_tbf, dataset="_test")
+    ann_file_tbf = os.path.join("data", training)
+    use_context_words(ann_file_tbf)
